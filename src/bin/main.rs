@@ -2,14 +2,18 @@ use std::{
     fs::File,
     io::{Read, Write},
     net::TcpListener,
+    thread,
 };
+
+use tcp_server::ThreadPool;
 
 fn main() {
     let listenner = TcpListener::bind("0.0.0.0:7878").unwrap();
+    let pool = ThreadPool::new(5);
     for stream in listenner.incoming() {
         let stream = stream.unwrap();
         println!("Connection establishied!");
-        handle_connection(stream);
+        pool.execute(|| handle_connection(stream));
     }
 }
 fn handle_connection(mut stream: std::net::TcpStream) -> () {
@@ -20,22 +24,17 @@ fn handle_connection(mut stream: std::net::TcpStream) -> () {
     stream.read(&mut buffer).unwrap();
 
     let get = b"GET / HTTP/1.1\r\n";
-    if buffer.starts_with(get) {
-        let mut file = File::open("h.html").unwrap();
-        let mut content = String::new();
-        file.read_to_string(&mut content).unwrap();
+    let (status_line, file_path) = if buffer.starts_with(get) {
+        ("HTTP/1.1 200 OK\r\n\r\n", "h.html")
+    } else {
+        ("HTTP/1.1 404 NOT FOUND\r\n\r\n", "404.html")
+    };
 
-        let response = format!("HTTP/1.1 200 OK\r\n\r\n{}", content);
-        stream.write(response.as_bytes()).unwrap();
-        stream.flush().unwrap();
-        return ();
-    }
-    let status_line = "HTTP/1.1 404 NOT FOUND\r\n\r\n";
-    let mut file = File::open("404.html").unwrap();
+    let mut file = File::open(file_path).unwrap();
     let mut content = String::new();
     file.read_to_string(&mut content).unwrap();
-    let response = format!("{}{}", status_line, content);
 
+    let response = format!("{}{}", status_line, content);
     stream.write(response.as_bytes()).unwrap();
     stream.flush().unwrap();
 }
