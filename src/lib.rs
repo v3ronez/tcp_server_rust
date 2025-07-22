@@ -2,16 +2,19 @@ use std::{
     sync::{Arc, Mutex, mpsc},
     thread,
 };
+type ReceiverWorker = Arc<Mutex<mpsc::Receiver<Message>>>;
+// Arc<Mutex<mspc::Receiver<Box<dyn FnBox + Send + 'static>>>>
+type Job = Box<dyn FnBox + Send + 'static>;
 
-type ReceiverWorker = Arc<Mutex<mpsc::Receiver<Job>>>;
 struct Worker {
     id: usize,
-    thread: thread::JoinHandle<()>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 trait FnBox {
     fn call_box(self: Box<Self>);
 }
+
 impl<F: FnOnce()> FnBox for F {
     fn call_box(self: Box<Self>) {
         (*self)()
@@ -21,23 +24,38 @@ impl Worker {
     fn new(id: usize, receiver: ReceiverWorker) -> Self {
         let thread = thread::spawn(move || {
             loop {
-                let job = receiver.lock().unwrap().recv().unwrap();
-                println!("Worker {} got a job; executing.", id);
-                job.call_box();
+                let message = receiver.lock().unwrap().recv().unwrap();
+                match message {
+                    Message::NewJob(job) => {
+                        println!("Worker {} got a job; executing.", id);
+                        job.call_box();
+                    }
+                    Message::Terminate => {
+                        println!("Worker {} was told to terminate", id);
+                        break;
+                    }
+                };
             }
         });
 
-        Self { id, thread }
+        Self {
+            id,
+            thread: Some(thread),
+        }
     }
+}
+
+enum Message {
+    NewJob(Job),
+    Terminate,
 }
 
 pub struct ThreadPool {
     workers: Vec<Worker>,
-    sender: mpsc::Sender<Job>,
+    sender: mpsc::Sender<Message>,
 }
 
 // type Job = Box<dyn FnOnce() + Send + 'static>;
-type Job = Box<dyn FnBox + Send + 'static>;
 impl ThreadPool {
     /// Create a new ThreadPool.
     ///
@@ -62,6 +80,26 @@ impl ThreadPool {
         F: FnOnce() + Send + 'static,
     {
         let job = Box::new(f);
-        self.sender.send(job).unwrap()
+        // job: Box<dyn FnBox + Send + 'static>
+        // FnBox => F: FnOnce() + Send + 'static
+        self.sender.send(Message::NewJob(job)).unwrap()
+    }
+}
+
+//Gracefull shutdown per worker
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        println!("Shutting down all workers");
+        // force to all workers receive correctly the terminate message
+        for _ in &mut self.workers {
+            self.sender.send(Message::Terminate).unwrap()
+        }
+
+        for worker in &mut self.workers {
+            println!("Shutting down worker {}", worker.id);
+            if let Some(thread) = worker.thread.take() {
+                thread.join().unwrap()
+            }
+        }
     }
 }

@@ -10,11 +10,12 @@ use tcp_server::ThreadPool;
 fn main() {
     let listenner = TcpListener::bind("0.0.0.0:7878").unwrap();
     let pool = ThreadPool::new(5);
-    for stream in listenner.incoming() {
+    for stream in listenner.incoming().take(2) {
         let stream = stream.unwrap();
         println!("Connection establishied!");
         pool.execute(|| handle_connection(stream));
     }
+    println!("Shutting down.");
 }
 fn handle_connection(mut stream: std::net::TcpStream) -> () {
     // this is create on stack
